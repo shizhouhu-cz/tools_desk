@@ -3,18 +3,24 @@ import type { LucideIcon } from "lucide-react";
 import {
   FileSearch,
   FileStack,
+  Film,
   FolderInput,
   Images,
   Presentation,
+  Scissors,
   Stamp,
   Table2,
+  Type,
 } from "lucide-react";
 import FileCollector from "@/tools/file-collector";
 import PptxToPdf from "@/tools/pptx-to-pdf";
 import PdfToImages from "@/tools/pdf-to-images";
+import PdfWatermark from "@/tools/pdf-watermark";
+import PdfExtract from "@/tools/pdf-extract";
 import Watermark from "@/tools/watermark";
 import DocxStructure from "@/tools/docx-structure";
 import SqliteExplorer from "@/tools/sqlite-explorer";
+import VideoSpritesheet from "@/tools/video-spritesheet";
 
 export interface ToolMeta {
   id: string;
@@ -56,6 +62,24 @@ export const TOOLS: ToolMeta[] = [
     element: <PdfToImages />,
   },
   {
+    id: "pdf-watermark",
+    path: "/tools/pdf-watermark",
+    title: "PDF 打水印",
+    subtitle: "斜向平铺 / 嵌入中文字体",
+    description: "给 PDF 每页添加半透明平铺文字水印，嵌入系统中文字体，单文件另存输出。",
+    icon: Type,
+    element: <PdfWatermark />,
+  },
+  {
+    id: "pdf-extract",
+    path: "/tools/pdf-extract",
+    title: "PDF 页面提取",
+    subtitle: "按页码范围切割另存",
+    description: "从 PDF 中提取指定页码范围，生成新的 PDF 文件，不重新编码、无损输出。",
+    icon: Scissors,
+    element: <PdfExtract />,
+  },
+  {
     id: "watermark",
     path: "/tools/watermark",
     title: "图片打水印",
@@ -81,6 +105,15 @@ export const TOOLS: ToolMeta[] = [
     description: "连接本机 SQLite 数据库文件，浏览表结构与行数，直接执行 SQL 语句查看结果。",
     icon: Table2,
     element: <SqliteExplorer />,
+  },
+  {
+    id: "video-spritesheet",
+    path: "/tools/video-spritesheet",
+    title: "视频转精灵图",
+    subtitle: "抽帧 / 网格图集 / zip 播放包",
+    description: "把视频按采样帧率抽帧生成网格精灵图集，打包含自包含播放器的 zip，工具内可直接预览播放。",
+    icon: Film,
+    element: <VideoSpritesheet />,
   },
 ];
 

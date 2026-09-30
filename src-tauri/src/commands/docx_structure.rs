@@ -83,7 +83,7 @@ pub async fn docx_structure(
 
     let task = tasks.create(&app, "docx-structure");
     let cfg = settings.0.read().unwrap().clone();
-    let python_exe = docx_split::resolve_python_path(&app, &cfg.docx_python_path)?;
+    let python_exe = docx_split::resolve_python_path(&app)?;
     let db_path = resolve_db_path(&app, &cfg)?;
     let envs = docx_split::llm_env(&cfg, llm_enabled);
 

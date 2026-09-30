@@ -242,26 +242,6 @@ export default function SettingsPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-1.5">
-              <Label>Python 解释器路径（可选）</Label>
-              <div className="flex gap-2">
-                <Input
-                  value={s.docx_python_path}
-                  placeholder="留空使用内置 Python 运行时"
-                  onChange={(e) => upd({ docx_python_path: e.target.value })}
-                />
-                <Button
-                  variant="outline"
-                  className="shrink-0"
-                  onClick={async () => {
-                    const f = await pickFile("选择 python.exe", ["exe"]);
-                    if (f) upd({ docx_python_path: f });
-                  }}
-                >
-                  选择
-                </Button>
-              </div>
-            </div>
-            <div className="space-y-1.5">
               <Label>数据库存储目录（可选）</Label>
               <div className="flex gap-2">
                 <Input
@@ -282,14 +262,6 @@ export default function SettingsPage() {
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label>LLM Provider</Label>
-                <Input
-                  value={s.docx_llm_provider}
-                  placeholder="openai 或 mock"
-                  onChange={(e) => upd({ docx_llm_provider: e.target.value })}
-                />
-              </div>
               <div className="space-y-1.5">
                 <Label>模型名</Label>
                 <Input

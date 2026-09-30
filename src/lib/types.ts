@@ -114,9 +114,7 @@ export interface Settings {
   max_pages: number;
   font_dir: string;
   default_font: string;
-  docx_python_path: string;
   docx_db_dir: string;
-  docx_llm_provider: string;
   docx_llm_base_url: string;
   docx_llm_api_key: string;
   docx_llm_auth_header: string;
@@ -177,4 +175,41 @@ export interface SqliteQueryResult {
   total_rows: number;
   truncated: boolean;
   rows_affected: number | null;
+}
+
+/** pdf_watermark / pdf_extract_pages 单文件结果 */
+export interface PdfEditOutcome {
+  output: string;
+  pages: number;
+  duration_ms: number;
+}
+
+/** pdf_watermark 参数 */
+export interface PdfWatermarkParams {
+  text: string;
+  font_size: number;
+  color: string;
+  opacity: number;
+  angle: number;
+  density: number;
+}
+
+/** video_spritesheet 结果 */
+export interface SpriteOutcome {
+  ok: boolean;
+  zip_path: string;
+  /** 预览页地址（sprite-preview 协议，WebView2 下为 http://sprite-preview.localhost/...） */
+  preview_url: string;
+  frame_count: number;
+  requested_fps: number;
+  actual_fps: number;
+  downsampled: boolean;
+  pages: number;
+  cols: number;
+  frame_width: number;
+  frame_height: number;
+  duration_sec: number;
+  duration_ms: number;
+  /** 帧数超上限降级提示（前端必须显式 toast） */
+  warning: string | null;
 }

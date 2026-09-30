@@ -29,12 +29,8 @@ pub struct Settings {
     pub font_dir: String,
     /// 水印默认字体名。
     pub default_font: String,
-    /// docx 拆分：python.exe 路径；留空用内置 resources 运行时。
-    pub docx_python_path: String,
     /// docx 拆分数据库目录；留空用 app_data_dir/docx_split/。
     pub docx_db_dir: String,
-    /// docx LLM 结构恢复 provider（openai | mock）。
-    pub docx_llm_provider: String,
     /// docx LLM 网关 base_url（OpenAI 兼容）。
     pub docx_llm_base_url: String,
     /// docx LLM API Key（本机工具场景，明文存储）。
@@ -57,9 +53,7 @@ impl Default for Settings {
             max_pages: 200,
             font_dir: "C:/Windows/Fonts".into(),
             default_font: "SimHei".into(),
-            docx_python_path: String::new(),
             docx_db_dir: String::new(),
-            docx_llm_provider: "openai".into(),
             docx_llm_base_url: String::new(),
             docx_llm_api_key: String::new(),
             docx_llm_auth_header: String::new(),

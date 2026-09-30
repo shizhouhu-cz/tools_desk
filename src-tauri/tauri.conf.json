@@ -20,7 +20,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1420 ws://localhost:1421 http://localhost:1420; img-src 'self' data: asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1420 ws://localhost:1421 http://localhost:1420; img-src 'self' data: asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; font-src 'self' data:; frame-src http://sprite-preview.localhost"
     }
   },
   "bundle": {
@@ -28,7 +28,8 @@
     "targets": "all",
     "resources": {
       "assets/lib/pdfium.dll": "assets/lib/pdfium.dll",
-      "resources/python/": "resources/python/"
+      "resources/python/": "resources/python/",
+      "resources/ffmpeg/": "resources/ffmpeg/"
     },
     "icon": [
       "icons/32x32.png",

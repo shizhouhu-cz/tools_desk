@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import re
+import sys
+import time
 from typing import List
 
 import httpx
@@ -78,28 +80,49 @@ class OpenAICompatProvider:
         payload = {
             "model": self._settings.recovery_model,
             "temperature": 0,
+            # 关闭 Qwen3 系思考模式（thinking 是耗时主因）。
+            # 注意：必须放 JSON body 顶层（DashScope 兼容），extra_body 是 OpenAI
+            # SDK 的客户端参数，httpx 裸调时无效；vLLM 自部署用 chat_template_kwargs。
+            "enable_thinking": False,
+            "chat_template_kwargs": {"enable_thinking": False},
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
         }
         last_err: Exception | None = None
-        with httpx.Client(timeout=httpx.Timeout(120.0)) as client:
-            for _ in range(2):  # 1 次重试（design.md 4.4）
+        print(f"[llm] POST {url} model={payload['model']}", file=sys.stderr)
+        with httpx.Client(timeout=httpx.Timeout(180.0)) as client:
+            for attempt in range(2):  # 1 次重试（design.md 4.4）
+                t0 = time.monotonic()
                 try:
                     resp = client.post(url, json=payload, headers=self._headers())
                     resp.raise_for_status()
+                    print(
+                        f"[llm] HTTP {resp.status_code} 耗时 {time.monotonic() - t0:.1f}s",
+                        file=sys.stderr,
+                    )
                     content = resp.json()["choices"][0]["message"]["content"]
                     return _extract_json(content)
                 except Exception as e:  # noqa: BLE001
+                    print(
+                        f"[llm] 第{attempt + 1}次调用失败(已耗时 {time.monotonic() - t0:.1f}s): {e}",
+                        file=sys.stderr,
+                    )
                     last_err = e
         raise LLMError(f"complete_json 调用失败：{last_err}")
 
 
 def get_provider(settings: Settings):
-    """按配置返回 Provider；provider 未配置/未知返回 None（上层走降级）。"""
+    """按配置返回 Provider；未配置/凭证缺失/未知均返回 None（上层走降级，不抛异常）。"""
     if settings.llm_provider == "mock":
         return MockProvider()
     if settings.llm_provider == "openai":
+        if not settings.openai_api_key and not settings.openai_auth_header:
+            print(
+                "[llm] provider=openai 但未配置凭证（OPENAI_API_KEY / DOC_ANALYZE_OPENAI_AUTH_HEADER），降级规则模式",
+                file=sys.stderr,
+            )
+            return None
         return OpenAICompatProvider(settings)
     return None

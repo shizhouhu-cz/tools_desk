@@ -70,7 +70,7 @@ def recover_structure(items: list[dict], settings: Settings) -> list[dict] | Non
     """
     provider = get_provider(settings)
     if provider is None:
-        print("AI 结构恢复跳过：provider 未配置", file=sys.stderr)
+        print("[llm] provider 未配置（mock/openai 之外的值），降级规则模式", file=sys.stderr)
         return None
     payload = _user_payload(items)
     expected_idx = {int(it["idx"]) for it in items}
@@ -93,5 +93,5 @@ def recover_structure(items: list[dict], settings: Settings) -> list[dict] | Non
         except (LLMError, ValidationError, ValueError, TypeError, KeyError) as e:
             last_err = e
             continue
-    print(f"AI 结构恢复失败：{last_err}", file=sys.stderr)
+    print(f"[llm] 结构恢复失败(已重试): {last_err}", file=sys.stderr)
     return None

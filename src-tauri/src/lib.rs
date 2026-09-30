@@ -45,6 +45,8 @@ pub fn run() {
             commands::docx_structure::docx_chapter_content,
             commands::pdf_to_images::pdf_to_images,
             commands::pdf_to_images::probe_dify,
+            commands::pdf_edit::pdf_watermark,
+            commands::pdf_edit::pdf_extract_pages,
             commands::watermark::watermark_images,
             commands::sqlite_explorer::sqlite_scan,
             commands::sqlite_explorer::sqlite_detect,
@@ -53,7 +55,12 @@ pub fn run() {
             commands::settings::get_settings,
             commands::settings::set_settings,
             commands::settings::probe_soffice,
+            commands::video_spritesheet::video_spritesheet,
         ])
+        // 精灵图预览协议：staging 目录 → iframe 可加载的页面（WebView2 下为 http://sprite-preview.localhost/...）
+        .register_uri_scheme_protocol("sprite-preview", |ctx, request| {
+            commands::video_spritesheet::sprite_preview_protocol(ctx, request)
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

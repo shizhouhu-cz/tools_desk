@@ -1,5 +1,5 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import type {
   ChapterNode,
@@ -8,6 +8,7 @@ import type {
   InvokeError,
   SqliteQueryResult,
   SqliteTableInfo,
+  SpriteOutcome,
 } from "./types";
 
 /** 统一 invoke 封装：错误序列化对象 -> InvokeError，非取消错误自动 toast。 */
@@ -52,6 +53,20 @@ export async function pickFile(title: string, extensions: string[]): Promise<str
   const sel = await open({
     multiple: false,
     title,
+    filters: [{ name: `${extensions.join(" / ").toUpperCase()} 文件`, extensions }],
+  });
+  return typeof sel === "string" ? sel : null;
+}
+
+/** 另存为对话框（单文件输出）。defaultPath 可传完整路径以预填目录和文件名。 */
+export async function pickSaveFile(
+  title: string,
+  defaultPath: string,
+  extensions: string[]
+): Promise<string | null> {
+  const sel = await save({
+    title,
+    defaultPath,
     filters: [{ name: `${extensions.join(" / ").toUpperCase()} 文件`, extensions }],
   });
   return typeof sel === "string" ? sel : null;
@@ -124,4 +139,18 @@ export async function sqliteQuery(
   maxRows?: number
 ): Promise<SqliteQueryResult> {
   return invoke<SqliteQueryResult>("sqlite_query", { path, sql, maxRows });
+}
+
+/** 视频转精灵图：抽帧 → 网格图集 → zip（含 data.js / player.html / 说明.txt）。 */
+export async function videoSpritesheet(args: {
+  input: string;
+  fps: number;
+  maxFrameWidth: number;
+  maxSheetSize: number;
+  format: string;
+  quality: number;
+  maxFrames: number;
+  outputDir: string | null;
+}): Promise<SpriteOutcome> {
+  return invoke<SpriteOutcome>("video_spritesheet", args);
 }

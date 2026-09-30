@@ -80,7 +80,13 @@ def _recover_decisions(
     for i, (a, b) in enumerate(zip(bounds, bounds[1:]), 1):
         if progress:
             progress("llm", i, total_parts, f"AI 结构恢复 第{i}/{total_parts}段")
+        t0 = time.monotonic()
         part = recover_structure(items[a:b], settings)
+        if progress:
+            progress(
+                "llm", i, total_parts,
+                f"AI 结构恢复 第{i}/{total_parts}段 完成（耗时 {time.monotonic() - t0:.1f}s）",
+            )
         if part is None:
             return None
         decisions.extend(part)
@@ -246,6 +252,8 @@ def _run_pipeline(
     model_decisions: list[dict] | None = None
     provider = llm_provider.get_provider(settings)
     if provider is not None and candidates:
+        # 直达 UI 进度：一眼确认走的是真 LLM 还是 Mock
+        _report("llm", 0, 0, f"AI 结构恢复: {type(provider).__name__} (model={settings.recovery_model})")
         try:
             from doc_analyze.llm.recovery import recover_structure
         except ImportError:

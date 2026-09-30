@@ -103,5 +103,9 @@ export const STAGE_LABELS: Record<string, string> = {
   parse: "解析文档",
   llm: "AI 结构恢复",
   store: "入库",
+  probe: "探测视频",
+  decode: "抽帧中",
+  compose: "合成图集",
+  pack: "打包 zip",
   done: "完成",
 };

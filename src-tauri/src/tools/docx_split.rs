@@ -49,18 +49,9 @@ pub struct ExtractOk {
     pub stats: ExtractStats,
 }
 
-/// 解析 python.exe 路径：显式配置 > resources 打包路径 > 开发目录兜底。
+/// 解析 python.exe 路径：resources 打包路径 > 开发目录兜底。
 /// （dev 下 Resource 解析到 src-tauri/，与 setup-python-runtime.ps1 写入位置一致。）
-pub fn resolve_python_path(app: &AppHandle, configured: &str) -> AppResult<PathBuf> {
-    if !configured.trim().is_empty() {
-        let p = PathBuf::from(configured);
-        if p.is_file() {
-            return Ok(p);
-        }
-        return Err(AppError::Internal(format!(
-            "设置中配置的 python.exe 不存在: {configured}"
-        )));
-    }
+pub fn resolve_python_path(app: &AppHandle) -> AppResult<PathBuf> {
     if let Ok(p) = app.path().resolve(
         "resources/python/python.exe",
         tauri::path::BaseDirectory::Resource,
@@ -87,18 +78,16 @@ pub fn llm_env(cfg: &Settings, llm_enabled: bool) -> Vec<(String, String)> {
     if !llm_enabled {
         return env;
     }
+    // provider 固定 openai：UI 开关开=走真 LLM，关=python 端默认 mock，无中间态
     let mut pass = |key: &str, v: &str| {
         if !v.trim().is_empty() {
             env.push((key.to_string(), v.trim().to_string()));
         }
     };
-    pass("DOC_ANALYZE_LLM_PROVIDER", &cfg.docx_llm_provider);
+    pass("DOC_ANALYZE_LLM_PROVIDER", "openai");
     pass("OPENAI_BASE_URL", &cfg.docx_llm_base_url);
     pass("OPENAI_API_KEY", &cfg.docx_llm_api_key);
-    pass(
-        "DOC_ANALYZE_OPENAI_AUTH_HEADER",
-        &cfg.docx_llm_auth_header,
-    );
+    pass("DOC_ANALYZE_OPENAI_AUTH_HEADER", &cfg.docx_llm_auth_header);
     pass("DOC_ANALYZE_RECOVERY_MODEL", &cfg.docx_llm_model);
     env
 }
@@ -114,11 +103,20 @@ pub fn run_extract(
     envs: &[(String, String)],
 ) -> Result<ExtractOk, String> {
     let mut cmd = Command::new(python_exe);
-    cmd.args(["-X", "utf8", "-I", "-m", "doc_analyze.cli", "extract", input, "--db"])
-        .arg(db_path)
-        .arg("--json")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.args([
+        "-X",
+        "utf8",
+        "-I",
+        "-m",
+        "doc_analyze.cli",
+        "extract",
+        input,
+        "--db",
+    ])
+    .arg(db_path)
+    .arg("--json")
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
     for (k, v) in envs {
         cmd.env(k, v);
     }
@@ -140,12 +138,28 @@ pub fn run_extract(
         .unwrap_or(input)
         .to_string();
 
-    // stderr 独立线程排空，避免管道写满阻塞子进程
+    // stderr 独立线程排空（防管道写满阻塞子进程）；
+    // 以 [llm] 开头的诊断行实时转发到进度消息，其余收进尾部缓冲
     let (err_tx, err_rx) = mpsc::channel::<Vec<u8>>();
+    let stderr_handle = handle.clone();
     thread::spawn(move || {
         let mut buf = Vec::new();
-        if let Some(mut p) = stderr {
-            let _ = std::io::Read::read_to_end(&mut p, &mut buf);
+        if let Some(p) = stderr {
+            let mut reader = BufReader::new(p);
+            let mut line = Vec::new();
+            loop {
+                line.clear();
+                match reader.read_until(b'\n', &mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        buf.extend_from_slice(&line);
+                        let s = String::from_utf8_lossy(&line).trim().to_string();
+                        if s.starts_with("[llm]") {
+                            stderr_handle.progress_msg("llm", 0, 0, Some(s));
+                        }
+                    }
+                }
+            }
         }
         let _ = err_tx.send(buf);
     });
@@ -163,10 +177,7 @@ pub fn run_extract(
             };
             match v.get("type").and_then(|t| t.as_str()) {
                 Some("progress") => {
-                    let stage = v
-                        .get("stage")
-                        .and_then(|s| s.as_str())
-                        .unwrap_or("extract");
+                    let stage = v.get("stage").and_then(|s| s.as_str()).unwrap_or("extract");
                     let current = v.get("current").and_then(|c| c.as_u64()).unwrap_or(0);
                     let total = v.get("total").and_then(|t| t.as_u64()).unwrap_or(0);
                     let message = v
@@ -237,17 +248,20 @@ mod tests {
     #[test]
     fn test_llm_env_enabled_passes_nonempty() {
         let mut cfg = fake_settings();
-        cfg.docx_llm_provider = "openai".into();
         cfg.docx_llm_base_url = "http://gw.internal/v1".into();
         cfg.docx_llm_api_key = " sk-test ".into();
         cfg.docx_llm_model = "qwen-plus".into();
         // auth_header 留空：不传
         let env = llm_env(&cfg, true);
+        // provider 恒为 openai
+        assert!(env.contains(&("DOC_ANALYZE_LLM_PROVIDER".into(), "openai".into())));
         assert!(env.contains(&("OPENAI_BASE_URL".into(), "http://gw.internal/v1".into())));
         // trim 后传值
         assert!(env.contains(&("OPENAI_API_KEY".into(), "sk-test".into())));
         assert!(env.contains(&("DOC_ANALYZE_RECOVERY_MODEL".into(), "qwen-plus".into())));
-        assert!(env.iter().all(|(k, _)| k != "DOC_ANALYZE_OPENAI_AUTH_HEADER"));
+        assert!(env
+            .iter()
+            .all(|(k, _)| k != "DOC_ANALYZE_OPENAI_AUTH_HEADER"));
     }
 
     #[test]

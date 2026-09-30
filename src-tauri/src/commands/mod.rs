@@ -1,10 +1,12 @@
 pub mod collector;
 pub mod docx_structure;
 pub mod open;
+pub mod pdf_edit;
 pub mod pdf_to_images;
 pub mod pptx_to_pdf;
 pub mod settings;
 pub mod sqlite_explorer;
+pub mod video_spritesheet;
 pub mod watermark;
 
 use serde::Serialize;

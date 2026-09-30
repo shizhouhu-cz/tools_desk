@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>精灵图播放器</title>
+<style>
+  :root { color-scheme: dark; --bg:#101214; --panel:#181b1f; --line:#2a2f36; --text:#e8eaed; --muted:#9aa0a6; --accent:#4f9cf9; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 system-ui,"Segoe UI","Microsoft YaHei",sans-serif; display:flex; flex-direction:column; height:100vh; }
+  header { padding:10px 14px; border-bottom:1px solid var(--line); display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; }
+  header h1 { font-size:14px; margin:0; font-weight:600; }
+  header .meta { color:var(--muted); font-size:12px; }
+  main { flex:1; display:flex; align-items:center; justify-content:center; padding:16px; min-height:0; }
+  canvas { max-width:100%; max-height:100%; background:#000; box-shadow:0 0 0 1px var(--line); }
+  .controls { display:flex; gap:10px; align-items:center; padding:10px 14px; border-top:1px solid var(--line); background:var(--panel); flex-wrap:wrap; }
+  button, select { background:transparent; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:5px 10px; font-size:13px; cursor:pointer; }
+  button:hover, select:hover { border-color:var(--accent); }
+  input[type=range] { flex:1; min-width:160px; accent-color:var(--accent); }
+  .pos { font-variant-numeric: tabular-nums; color:var(--muted); min-width:110px; text-align:right; }
+  #error { padding:24px; color:#f88; }
+</style>
+</head>
+<body>
+<header>
+  <h1>精灵图播放器</h1>
+  <span class="meta" id="meta"></span>
+</header>
+<main>
+  <canvas id="cv" width="8" height="8" hidden></canvas>
+  <div id="error" hidden></div>
+</main>
+<div class="controls">
+  <button id="play" type="button">▶ 播放</button>
+  <input id="seek" type="range" min="0" max="0" step="1" value="0" aria-label="进度">
+  <span class="pos" id="pos">0 / 0</span>
+  <select id="speed" aria-label="倍速">
+    <option value="0.25">0.25×</option>
+    <option value="0.5">0.5×</option>
+    <option value="1" selected>1×</option>
+    <option value="2">2×</option>
+    <option value="4">4×</option>
+  </select>
+  <button id="loop" type="button">循环：开</button>
+</div>
+<script src="data.js"></script>
+<script>
+"use strict";
+const M = window.SPRITE_META;
+const $ = (id) => document.getElementById(id);
+const cv = $("cv"), ctx = cv.getContext("2d");
+const playBtn = $("play"), seek = $("seek"), pos = $("pos"), speedSel = $("speed"), loopBtn = $("loop"), errBox = $("error");
+
+if (!M || !M.pages || !M.pages.length) {
+  cv.hidden = true;
+  errBox.hidden = false;
+  errBox.textContent = "未找到元数据 window.SPRITE_META：请确保 data.js 与 player.html 在同一目录。";
+} else {
+  init();
+}
+
+function init() {
+  const total = M.frameCount;
+  let frame = 0, playing = false, speed = 1, loop = true, acc = 0, lastTs = null;
+
+  cv.width = M.frameWidth;
+  cv.height = M.frameHeight;
+  cv.hidden = false;
+  seek.max = String(Math.max(0, total - 1));
+  $("meta").textContent = M.source + " · " + total + " 帧 · " + M.actualFps + " fps · " +
+    M.pages.length + " 张图集 · " + M.frameWidth + "×" + M.frameHeight;
+
+  // ── 分页图按需加载 ──
+  const pageImgs = M.pages.map(function (p) {
+    const img = new Image();
+    img.decoding = "async";
+    img.src = p.file;
+    return img;
+  });
+  function pageOf(idx) {
+    for (let i = M.pages.length - 1; i >= 0; i--) {
+      if (idx >= M.pages[i].firstFrame) return i;
+    }
+    return 0;
+  }
+  function draw(idx) {
+    const p = pageOf(idx);
+    const meta = M.pages[p], img = pageImgs[p];
+    const paint = function () {
+      const local = idx - meta.firstFrame;
+      const row = Math.floor(local / M.cols), col = local % M.cols;
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      ctx.drawImage(img, col * M.frameWidth, row * M.frameHeight, M.frameWidth, M.frameHeight,
+        0, 0, M.frameWidth, M.frameHeight);
+    };
+    if (img.complete && img.naturalWidth) paint();
+    else img.onload = paint;
+  }
+  function render() {
+    draw(frame);
+    seek.value = String(frame);
+    pos.textContent = (frame + 1) + " / " + total;
+  }
+  function setPlaying(v) {
+    playing = v;
+    playBtn.textContent = v ? "⏸ 暂停" : "▶ 播放";
+    if (v) { acc = 0; lastTs = null; }
+  }
+  function tick(ts) {
+    if (playing) {
+      if (lastTs != null) {
+        acc += (ts - lastTs) / 1000;
+        const frameDur = 1 / (M.actualFps * speed);
+        while (acc >= frameDur) {
+          acc -= frameDur;
+          if (frame + 1 >= total) {
+            if (loop) frame = 0;
+            else { frame = total - 1; setPlaying(false); break; }
+          } else {
+            frame++;
+          }
+        }
+      }
+      lastTs = ts;
+      render();
+    } else {
+      lastTs = null;
+    }
+    requestAnimationFrame(tick);
+  }
+
+  playBtn.addEventListener("click", function () { setPlaying(!playing); });
+  seek.addEventListener("input", function () { setPlaying(false); frame = Number(seek.value); render(); });
+  speedSel.addEventListener("change", function () { speed = Number(speedSel.value); });
+  loopBtn.addEventListener("click", function () {
+    loop = !loop;
+    loopBtn.textContent = "循环：" + (loop ? "开" : "关");
+  });
+  // 焦点在控件上时保留原生行为（空格点按钮、方向键调滑杆）。
+  window.addEventListener("keydown", function (e) {
+    const tag = e.target && e.target.tagName;
+    if (tag === "BUTTON" || tag === "SELECT" || tag === "INPUT") return;
+    if (e.code === "Space") { e.preventDefault(); setPlaying(!playing); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); setPlaying(false); frame = Math.max(0, frame - 1); render(); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); setPlaying(false); frame = Math.min(total - 1, frame + 1); render(); }
+  });
+
+  render();
+  requestAnimationFrame(tick);
+}
+</script>
+</body>
+</html>

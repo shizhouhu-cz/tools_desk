@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "setup:bundler": "powershell -ExecutionPolicy Bypass -File scripts/setup-tauri-bundler.ps1",
-    "setup:python": "powershell -ExecutionPolicy Bypass -File scripts/setup-python-runtime.ps1"
+    "setup:python": "powershell -ExecutionPolicy Bypass -File scripts/setup-python-runtime.ps1",
+    "setup:ffmpeg": "powershell -ExecutionPolicy Bypass -File scripts/setup-ffmpeg.ps1"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
