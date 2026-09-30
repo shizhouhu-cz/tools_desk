@@ -1,0 +1,60 @@
+[package]
+name = "tools"
+version = "0.1.0"
+description = "工具集平台 - Tauri 桌面客户端"
+authors = ["Ryan"]
+edition = "2021"
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "tools_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-log = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = [
+    "macros",
+    "sync",
+    "time",
+    "process",
+    "io-util",
+] }
+walkdir = "2"
+tempfile = "3"
+chrono = "0.4"
+uuid = { version = "1", features = ["v4"] }
+thiserror = "2"
+tracing = "0.1"
+
+# PDF 渲染（pdfium 动态库绑定）
+pdfium-render = { version = "0.8", features = ["sync"] }
+
+# SQLite（docx 拆分章节树直查；bundled 自带 FTS5）
+rusqlite = { version = "0.37", features = ["bundled"] }
+
+# HTTP 客户端（Dify 工作流调用）
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# 图片处理
+image = "0.25"
+ab_glyph = "0.2"
+# 有损 WebP 编码（image crate 仅支持无损 webp）
+libwebp = "0.1"
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

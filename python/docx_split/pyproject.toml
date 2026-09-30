@@ -1,0 +1,26 @@
+[project]
+name = "docx-split"
+version = "0.1.0"
+description = "DOCX 结构化拆分（章节树 + 表格 → SQLite），tools 工具箱内嵌版"
+requires-python = ">=3.12"
+dependencies = [
+    "python-docx>=1.1",
+    "lxml>=5.0",
+    "typer>=0.12",
+    "pydantic>=2.7",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+doc-analyze = "doc_analyze.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/doc_analyze"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["local: 需要真实招标文件，跑端到端"]
