@@ -106,6 +106,7 @@ export const STAGE_LABELS: Record<string, string> = {
   probe: "探测视频",
   decode: "抽帧中",
   compose: "合成图集",
+  gif: "生成 GIF",
   pack: "打包 zip",
   done: "完成",
 };

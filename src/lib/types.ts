@@ -198,8 +198,8 @@ export interface PdfWatermarkParams {
 export interface SpriteOutcome {
   ok: boolean;
   zip_path: string;
-  /** 预览页地址（sprite-preview 协议，WebView2 下为 http://sprite-preview.localhost/...） */
-  preview_url: string;
+  /** 精灵图预览页地址（仅生成精灵图时存在，sprite-preview 协议，WebView2 下为 http://sprite-preview.localhost/...） */
+  preview_url: string | null;
   frame_count: number;
   requested_fps: number;
   actual_fps: number;
@@ -210,6 +210,12 @@ export interface SpriteOutcome {
   frame_height: number;
   duration_sec: number;
   duration_ms: number;
+  /** GIF 预览地址（生成 GIF 时存在，sprite-preview 协议） */
+  gif_preview_url: string | null;
+  /** GIF 有效帧率（跳帧后） */
+  gif_fps: number | null;
+  gif_frames: number | null;
+  gif_dither: boolean | null;
   /** 帧数超上限降级提示（前端必须显式 toast） */
   warning: string | null;
 }

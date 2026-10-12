@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -41,6 +42,10 @@ export default function VideoSpritesheet() {
   const [format, setFormat] = useState<"jpeg" | "png">("jpeg");
   const [quality, setQuality] = useState(85);
   const [maxFrames, setMaxFrames] = useState(2000);
+  const [generateSprite, setGenerateSprite] = useState(true);
+  const [generateGif, setGenerateGif] = useState(true);
+  const [gifFpsInput, setGifFpsInput] = useState("12");
+  const [gifDither, setGifDither] = useState(true);
   const [outDir, setOutDir] = useState("");
 
   const [outcome, setOutcome] = useState<SpriteOutcome | null>(null);
@@ -50,6 +55,10 @@ export default function VideoSpritesheet() {
   const run = async () => {
     if (!videoPath) {
       toast.warning("请先选择视频文件");
+      return;
+    }
+    if (!generateSprite && !generateGif) {
+      toast.warning("请至少选择一种产物（精灵图或 GIF）");
       return;
     }
     setOutcome(null);
@@ -63,13 +72,20 @@ export default function VideoSpritesheet() {
         format,
         quality,
         maxFrames,
+        generateSprite,
+        generateGif,
+        gifFps: generateGif && gifFpsInput.trim() !== "" ? Math.max(1, Number(gifFpsInput)) : null,
+        gifDither,
         outputDir: outDir || null,
       });
       setOutcome(r);
       if (r.warning) {
         toast.warning(r.warning);
       } else {
-        toast.success(`精灵图生成完成：${r.frame_count} 帧 / ${r.pages} 张图集`);
+        const parts: string[] = [];
+        if (r.preview_url) parts.push(`${r.pages} 张图集`);
+        if (r.gif_preview_url) parts.push("GIF 动图");
+        toast.success(`生成完成：${r.frame_count} 帧 / ${parts.join(" + ")}`);
       }
     } catch (e) {
       if (normalizeError(e).code === "cancelled") toast.info("任务已取消");
@@ -82,7 +98,7 @@ export default function VideoSpritesheet() {
   return (
     <ToolShell
       title="视频转精灵图"
-      description="把视频按采样帧率抽帧，自动计算网格布局生成精灵图集，打包为含自包含播放器的 zip；解压后双击 player.html 即可播放。"
+      description="把视频按采样帧率抽帧，复用同一份帧数据生成精灵图集与 GIF 动图（可任选），打包为 zip 产物。"
     >
       <div className="mx-auto grid max-w-5xl items-start gap-4 lg:grid-cols-[minmax(0,1fr)_380px]">
         <div className="space-y-4">
@@ -102,10 +118,10 @@ export default function VideoSpritesheet() {
 
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">参数设置</CardTitle>
-              <CardDescription>默认参数以流畅优先；帧数超上限时自动降低采样帧率并显式提示。</CardDescription>
+              <CardTitle className="text-base">抽帧设置</CardTitle>
+              <CardDescription>由内置 ffmpeg 解码抽帧，帧数据供下方产物共用；帧数超上限时自动降低采样帧率并显式提示。</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
                   <Label>采样帧率（fps）</Label>
@@ -128,16 +144,6 @@ export default function VideoSpritesheet() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>图集边长上限（px）</Label>
-                  <Input
-                    type="number"
-                    min={256}
-                    max={16384}
-                    value={sheetSize}
-                    onChange={(e) => setSheetSize(Number(e.target.value))}
-                  />
-                </div>
-                <div className="space-y-1.5">
                   <Label>帧数上限（内存保护阀）</Label>
                   <Input
                     type="number"
@@ -147,28 +153,100 @@ export default function VideoSpritesheet() {
                     onChange={(e) => setMaxFrames(Number(e.target.value))}
                   />
                 </div>
-                <div className="space-y-1.5">
-                  <Label>图集格式</Label>
-                  <Select value={format} onValueChange={(v) => setFormat(v as typeof format)}>
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="jpeg">JPEG（体积小，推荐）</SelectItem>
-                      <SelectItem value="png">PNG（无损，体积大）</SelectItem>
-                    </SelectContent>
-                  </Select>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">输出产物</CardTitle>
+              <CardDescription>精灵图与 GIF 相互独立、可任选，至少勾选一种。</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="gen-sprite"
+                    checked={generateSprite}
+                    onCheckedChange={(v) => setGenerateSprite(v === true)}
+                  />
+                  <Label htmlFor="gen-sprite" className="font-normal">
+                    生成精灵图集
+                  </Label>
                 </div>
-                {format === "jpeg" && (
-                  <div className="space-y-1.5">
-                    <Label>JPEG 质量</Label>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={100}
-                      value={quality}
-                      onChange={(e) => setQuality(Number(e.target.value))}
-                    />
+                {generateSprite && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <Label>图集边长上限（px）</Label>
+                      <Input
+                        type="number"
+                        min={256}
+                        max={16384}
+                        value={sheetSize}
+                        onChange={(e) => setSheetSize(Number(e.target.value))}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>图集格式</Label>
+                      <Select value={format} onValueChange={(v) => setFormat(v as typeof format)}>
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="jpeg">JPEG（体积小，推荐）</SelectItem>
+                          <SelectItem value="png">PNG（无损，体积大）</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {format === "jpeg" && (
+                      <div className="space-y-1.5">
+                        <Label>JPEG 质量</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={100}
+                          value={quality}
+                          onChange={(e) => setQuality(Number(e.target.value))}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div className="space-y-3 border-t pt-4">
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="gen-gif"
+                    checked={generateGif}
+                    onCheckedChange={(v) => setGenerateGif(v === true)}
+                  />
+                  <Label htmlFor="gen-gif" className="font-normal">
+                    生成 GIF 动图（与精灵图同尺寸，复用抽帧数据）
+                  </Label>
+                </div>
+                {generateGif && (
+                  <div className="grid grid-cols-2 items-end gap-4">
+                    <div className="space-y-1.5">
+                      <Label>GIF 帧率上限（fps）</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={120}
+                        placeholder="留空跟随采样帧率"
+                        value={gifFpsInput}
+                        onChange={(e) => setGifFpsInput(e.target.value)}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2 pb-2.5">
+                      <Checkbox
+                        id="gif-dither"
+                        checked={gifDither}
+                        onCheckedChange={(v) => setGifDither(v === true)}
+                      />
+                      <Label htmlFor="gif-dither" className="font-normal">
+                        抖动（减少色带，体积略增）
+                      </Label>
+                    </div>
                   </div>
                 )}
               </div>
@@ -185,6 +263,17 @@ export default function VideoSpritesheet() {
               </div>
             </CardContent>
           </Card>
+        </div>
+
+        <div className="space-y-4">
+          <RunBar
+            running={running}
+            onRun={run}
+            label="开始生成"
+            runningLabel="生成中…"
+            hint="生成完成后可在下方直接预览；产物 zip 内附说明文件。"
+          />
+          <ProgressPanel task={task} onCancel={task.cancel} />
 
           {outcome && (
             <Card>
@@ -216,6 +305,12 @@ export default function VideoSpritesheet() {
                   <Row label="图集">
                     {outcome.pages} 页 × {outcome.cols} 列
                   </Row>
+                  {outcome.gif_preview_url && (
+                    <Row label="GIF">
+                      {outcome.gif_frames} 帧 @ {outcome.gif_fps?.toFixed(2)} fps（抖动
+                      {outcome.gif_dither ? "开" : "关"}）
+                    </Row>
+                  )}
                   <Row label="耗时">{formatDuration(outcome.duration_ms)}</Row>
                 </div>
                 <div className="flex gap-2">
@@ -227,32 +322,33 @@ export default function VideoSpritesheet() {
                     打开输出目录
                   </button>
                 </div>
-                <div className="overflow-hidden rounded-lg border">
-                  <iframe
-                    key={outcome.preview_url}
-                    src={outcome.preview_url}
-                    title="精灵图预览"
-                    className="h-[480px] w-full bg-black"
-                  />
-                </div>
+                {outcome.gif_preview_url && (
+                  <div className="overflow-hidden rounded-lg border">
+                    <img
+                      key={outcome.gif_preview_url}
+                      src={outcome.gif_preview_url}
+                      alt="GIF 动图预览"
+                      className="max-h-[480px] w-full bg-black object-contain"
+                    />
+                  </div>
+                )}
+                {outcome.preview_url && (
+                  <div className="overflow-hidden rounded-lg border">
+                    <iframe
+                      key={outcome.preview_url}
+                      src={outcome.preview_url}
+                      title="精灵图预览"
+                      className="h-[480px] w-full bg-black"
+                    />
+                  </div>
+                )}
                 <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Film className="size-3.5" />
-                  预览加载的即为 zip 产物中的 data.js / player.html / 精灵图。
+                  预览加载的即为 zip 产物内容（精灵图播放器 / GIF）。
                 </p>
               </CardContent>
             </Card>
           )}
-        </div>
-
-        <div className="space-y-4">
-          <RunBar
-            running={running}
-            onRun={run}
-            label="开始生成"
-            runningLabel="生成中…"
-            hint="生成完成后可在结果区直接预览播放效果，zip 解压后双击 player.html 播放。"
-          />
-          <ProgressPanel task={task} onCancel={task.cancel} />
         </div>
       </div>
     </ToolShell>

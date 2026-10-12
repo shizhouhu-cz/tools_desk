@@ -13,8 +13,8 @@ use crate::tools::video_spritesheet::{self, SpriteFormat, SpriteParams};
 pub struct SpriteOutcome {
     pub ok: bool,
     pub zip_path: String,
-    /// 预览页地址（sprite-preview 自定义协议，WebView2 下为 http://sprite-preview.localhost/...）。
-    pub preview_url: String,
+    /// 精灵图预览页地址（仅生成精灵图时存在，sprite-preview 自定义协议）。
+    pub preview_url: Option<String>,
     pub frame_count: u64,
     pub requested_fps: f64,
     pub actual_fps: f64,
@@ -25,11 +25,17 @@ pub struct SpriteOutcome {
     pub frame_height: u32,
     pub duration_sec: f64,
     pub duration_ms: u64,
+    /// GIF 预览地址（generate_gif 时存在，sprite-preview 协议）。
+    pub gif_preview_url: Option<String>,
+    /// GIF 有效帧率（跳帧后）。
+    pub gif_fps: Option<f64>,
+    pub gif_frames: Option<u64>,
+    pub gif_dither: Option<bool>,
     /// 非静默降级提示（帧数超上限），前端需 toast 显式提示。
     pub warning: Option<String>,
 }
 
-/// 视频转精灵图：抽帧 → 网格图集 → zip（含 data.js / player.html / 说明.txt）。
+/// 视频转精灵图：抽帧 →（可选）网格图集 / GIF → zip。
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn video_spritesheet(
@@ -42,6 +48,10 @@ pub async fn video_spritesheet(
     format: Option<String>,
     quality: Option<u8>,
     max_frames: Option<u64>,
+    generate_sprite: Option<bool>,
+    generate_gif: Option<bool>,
+    gif_fps: Option<u32>,
+    gif_dither: Option<bool>,
     output_dir: Option<String>,
 ) -> AppResult<SpriteOutcome> {
     let src = PathBuf::from(&input);
@@ -60,7 +70,17 @@ pub async fn video_spritesheet(
         format: SpriteFormat::parse(format.as_deref().unwrap_or("jpeg"))?,
         quality: quality.unwrap_or(85).clamp(1, 100),
         max_frames: max_frames.unwrap_or(2000).max(1),
+        generate_sprite: generate_sprite.unwrap_or(true),
+        generate_gif: generate_gif.unwrap_or(true),
+        // 0 视为未设置（跟随采样帧率）
+        gif_fps: gif_fps.filter(|&f| f > 0).map(|f| f.clamp(1, 120)),
+        gif_dither: gif_dither.unwrap_or(true),
     };
+    if !params.generate_sprite && !params.generate_gif {
+        return Err(AppError::BadRequest(
+            "请至少选择一种产物（精灵图或 GIF）".into(),
+        ));
+    }
 
     let output_dir = match output_dir {
         Some(d) if !d.trim().is_empty() => PathBuf::from(d),
@@ -112,7 +132,8 @@ pub async fn video_spritesheet(
     Ok(SpriteOutcome {
         ok: true,
         zip_path: result.zip_path.to_string_lossy().to_string(),
-        preview_url: format!("http://sprite-preview.localhost/{task_id}/player.html"),
+        preview_url: (result.pages > 0)
+            .then(|| format!("http://sprite-preview.localhost/{task_id}/player.html")),
         frame_count: result.frame_count,
         requested_fps: result.requested_fps,
         actual_fps: result.actual_fps,
@@ -123,6 +144,13 @@ pub async fn video_spritesheet(
         frame_height: result.frame_height,
         duration_sec: result.duration_sec,
         duration_ms: started.elapsed().as_millis() as u64,
+        gif_preview_url: result
+            .gif
+            .as_ref()
+            .map(|g| format!("http://sprite-preview.localhost/{task_id}/{}", g.name)),
+        gif_fps: result.gif.as_ref().map(|g| g.fps),
+        gif_frames: result.gif.as_ref().map(|g| g.frames),
+        gif_dither: result.gif.as_ref().map(|g| g.dither),
         warning,
     })
 }
@@ -165,6 +193,7 @@ const PREVIEW_MIME: &[(&str, &str)] = &[
     ("jpg", "image/jpeg"),
     ("jpeg", "image/jpeg"),
     ("png", "image/png"),
+    ("gif", "image/gif"),
     ("txt", "text/plain; charset=utf-8"),
 ];
 

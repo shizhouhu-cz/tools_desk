@@ -47,7 +47,10 @@ ttf-parser = "0.25"
 rusqlite = { version = "0.37", features = ["bundled"] }
 
 # HTTP 客户端（Dify 工作流调用）
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
 
 # 图片处理
 image = "0.25"
@@ -57,6 +60,10 @@ libwebp = "0.1"
 
 # zip 打包（视频转精灵图产物）
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# GIF 动画编码（视频转精灵图 v0.4：复用 RGBA 帧缓冲生成 GIF）
+gif = "0.13"
+color_quant = "1"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

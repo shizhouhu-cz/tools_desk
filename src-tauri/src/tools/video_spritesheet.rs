@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -71,6 +72,24 @@ pub struct SpriteParams {
     pub quality: u8,
     /// 帧数上限（同时充当内存保护阀）。
     pub max_frames: u64,
+    /// 是否生成精灵图集（与 GIF 相互独立的可选项，至少二者选一）。
+    pub generate_sprite: bool,
+    /// 是否生成 GIF（复用 RGBA 帧缓冲，v0.4）。
+    pub generate_gif: bool,
+    /// GIF 帧率上限（None 或 0 = 跟随采样帧率，不跳帧）。
+    pub gif_fps: Option<u32>,
+    /// GIF 是否启用 Floyd-Steinberg 抖动。
+    pub gif_dither: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct GifMeta {
+    /// 文件名（位于 staging 目录与 zip 内）。
+    pub name: String,
+    /// GIF 有效帧率（跳帧后）。
+    pub fps: f64,
+    pub frames: u64,
+    pub dither: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +106,8 @@ pub struct SpriteResult {
     pub frame_height: u32,
     /// 视频时长（秒）。
     pub duration_sec: f64,
+    /// GIF 产物（generate_gif 时存在）。
+    pub gif: Option<GifMeta>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -289,7 +310,7 @@ fn reap_children(handle: &TaskHandle) {
     }
 }
 
-/// 主入口：probe → decode → compose → pack。
+/// 主入口：probe → decode → compose（可选）→ gif（可选）→ pack。
 /// 产物写入 `staging`，zip 写入 `output_dir/<stem>_sprite.zip`。
 pub fn run(
     handle: &TaskHandle,
@@ -436,57 +457,91 @@ pub fn run(
         ));
     }
     info!("抽帧完成: {frame_count} 帧, 单帧 {frame_w}×{frame_h}");
-
-    // ── ③ compose：布局 + 逐页编码 ──────────────────────────
-    let layout = compute_layout(frame_count, frame_w, frame_h, params.max_sheet_size)?;
-    let sheet_w = (layout.cols as u32) * frame_w;
-    handle.progress_now("compose", 0, layout.pages);
+    let stem = input
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "video".into());
 
     std::fs::create_dir_all(staging)
         .map_err(|e| AppError::Internal(format!("创建暂存目录失败: {e}")))?;
 
-    let ext = params.format.extension();
-    let rows_per_page = layout.rows_per_page;
-    let mut page_files: Vec<String> = Vec::with_capacity(layout.pages as usize);
-    for page in 0..layout.pages {
-        if handle.is_cancelled() {
-            return Err(AppError::Cancelled);
-        }
-        let first_frame = page * rows_per_page * layout.cols;
-        let rows_this = (layout.rows - page * rows_per_page).min(rows_per_page);
-        let frames_this = frame_count - first_frame;
-        let frames_this = frames_this.min(rows_this * layout.cols);
-        let sheet_h = (rows_this as u32) * frame_h;
+    // ── ③ compose：布局 + 逐页编码（可选项，仅精灵图开启时）──
+    let (layout, page_files) = if params.generate_sprite {
+        let layout = compute_layout(frame_count, frame_w, frame_h, params.max_sheet_size)?;
+        let sheet_w = (layout.cols as u32) * frame_w;
+        handle.progress_now("compose", 0, layout.pages);
 
-        let encoded = encode_page(
-            &all[(first_frame as usize * frame_bytes)..],
-            frames_this as usize,
-            layout.cols as u32,
-            frame_w,
-            frame_h,
-            sheet_w,
-            sheet_h,
-            params.format,
-            params.quality,
-        )?;
-        let name = format!("sprite_{page}.{ext}");
-        std::fs::write(staging.join(&name), &encoded)
-            .map_err(|e| AppError::Internal(format!("写出图集失败: {e}")))?;
-        page_files.push(name);
+        let ext = params.format.extension();
+        let rows_per_page = layout.rows_per_page;
+        let mut page_files: Vec<String> = Vec::with_capacity(layout.pages as usize);
+        for page in 0..layout.pages {
+            if handle.is_cancelled() {
+                return Err(AppError::Cancelled);
+            }
+            let first_frame = page * rows_per_page * layout.cols;
+            let rows_this = (layout.rows - page * rows_per_page).min(rows_per_page);
+            let frames_this = frame_count - first_frame;
+            let frames_this = frames_this.min(rows_this * layout.cols);
+            let sheet_h = (rows_this as u32) * frame_h;
 
-        handle.progress_msg(
-            "compose",
-            page + 1,
-            layout.pages,
-            Some(format!(
-                "合成图集 {}/{}（{}×{}）",
+            let encoded = encode_page(
+                &all[(first_frame as usize * frame_bytes)..],
+                frames_this as usize,
+                layout.cols as u32,
+                frame_w,
+                frame_h,
+                sheet_w,
+                sheet_h,
+                params.format,
+                params.quality,
+            )?;
+            let name = format!("sprite_{page}.{ext}");
+            std::fs::write(staging.join(&name), &encoded)
+                .map_err(|e| AppError::Internal(format!("写出图集失败: {e}")))?;
+            page_files.push(name);
+
+            handle.progress_msg(
+                "compose",
                 page + 1,
                 layout.pages,
-                sheet_w,
-                sheet_h
-            )),
-        );
-    }
+                Some(format!(
+                    "合成图集 {}/{}（{}×{}）",
+                    page + 1,
+                    layout.pages,
+                    sheet_w,
+                    sheet_h
+                )),
+            );
+        }
+        (Some(layout), page_files)
+    } else {
+        (None, Vec::new())
+    };
+    // ── ③.5 gif：复用 RGBA 帧缓冲生成 GIF（失败则整个任务报错中止）──
+    let gif_meta = if params.generate_gif {
+        let (gif_fps, gif_indices) = gif_frame_plan(actual_fps, params.gif_fps, frame_count);
+        let gif_name = format!("{stem}.gif");
+        encode_gif(
+            handle,
+            staging,
+            &gif_name,
+            &all,
+            &gif_indices,
+            frame_bytes,
+            frame_w,
+            frame_h,
+            gif_fps,
+            params.gif_dither,
+        )?;
+        Some(GifMeta {
+            name: gif_name,
+            fps: gif_fps,
+            frames: gif_indices.len() as u64,
+            dither: params.gif_dither,
+        })
+    } else {
+        None
+    };
     drop(all); // 释放约 1 GB 帧缓冲
 
     // ── ④ 产物：data.js / player.html / 说明.txt ────────────
@@ -498,79 +553,82 @@ pub fn run(
         SpriteFormat::Jpeg => ("jpeg", Some(params.quality)),
         SpriteFormat::Png => ("png", None),
     };
-
-    let mut pages_meta = Vec::with_capacity(page_files.len());
-    for (i, name) in page_files.iter().enumerate() {
-        let first = (i as u64) * rows_per_page * layout.cols;
-        let count = (frame_count - first).min(rows_per_page * layout.cols);
-        let rows = count.div_ceil(layout.cols);
-        pages_meta.push(serde_json::json!({
-            "file": name,
-            "firstFrame": first,
-            "frameCount": count,
-            "rows": rows,
-        }));
-    }
+    let zip_path = output_dir.join(format!("{stem}_sprite.zip"));
     let created_at = chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let data_js = format!(
-        "window.SPRITE_META = {};",
-        serde_json::json!({
-            "version": 1,
-            "source": source_name,
-            "createdAt": created_at,
-            "requestedFps": params.fps,
-            "actualFps": actual_fps,
-            "downsampled": downsampled,
-            "frameCount": frame_count,
-            "frameWidth": frame_w,
-            "frameHeight": frame_h,
-            "cols": layout.cols,
-            "format": format_name,
-            "quality": quality_opt,
-            "pages": pages_meta,
-        })
-    );
-    std::fs::write(staging.join("data.js"), data_js)
-        .map_err(|e| AppError::Internal(format!("写出 data.js 失败: {e}")))?;
 
-    std::fs::write(
-        staging.join("player.html"),
-        include_str!("../../assets/player.html"),
-    )
-    .map_err(|e| AppError::Internal(format!("写出 player.html 失败: {e}")))?;
+    // data.js / player.html 是精灵图播放器的配套产物，仅精灵图开启时写出。
+    if let Some(layout) = &layout {
+        let rows_per_page = layout.rows_per_page;
+        let mut pages_meta = Vec::with_capacity(page_files.len());
+        for (i, name) in page_files.iter().enumerate() {
+            let first = (i as u64) * rows_per_page * layout.cols;
+            let count = (frame_count - first).min(rows_per_page * layout.cols);
+            let rows = count.div_ceil(layout.cols);
+            pages_meta.push(serde_json::json!({
+                "file": name,
+                "firstFrame": first,
+                "frameCount": count,
+                "rows": rows,
+            }));
+        }
+        let mut meta = serde_json::Map::new();
+        meta.insert("version".into(), serde_json::json!(1));
+        meta.insert("source".into(), serde_json::json!(source_name));
+        meta.insert("createdAt".into(), serde_json::json!(created_at));
+        meta.insert("requestedFps".into(), serde_json::json!(params.fps));
+        meta.insert("actualFps".into(), serde_json::json!(actual_fps));
+        meta.insert("downsampled".into(), serde_json::json!(downsampled));
+        meta.insert("frameCount".into(), serde_json::json!(frame_count));
+        meta.insert("frameWidth".into(), serde_json::json!(frame_w));
+        meta.insert("frameHeight".into(), serde_json::json!(frame_h));
+        meta.insert("cols".into(), serde_json::json!(layout.cols));
+        meta.insert("format".into(), serde_json::json!(format_name));
+        meta.insert("quality".into(), serde_json::json!(quality_opt));
+        meta.insert("pages".into(), serde_json::json!(pages_meta));
+        if let Some(g) = &gif_meta {
+            meta.insert("gif".into(), serde_json::json!(g.name));
+            meta.insert(
+                "gifFps".into(),
+                serde_json::json!((g.fps * 100.0).round() / 100.0),
+            );
+            meta.insert("gifFrames".into(), serde_json::json!(g.frames));
+            meta.insert("gifDither".into(), serde_json::json!(g.dither));
+        }
+        let data_js = format!("window.SPRITE_META = {};", serde_json::Value::Object(meta));
+        std::fs::write(staging.join("data.js"), data_js)
+            .map_err(|e| AppError::Internal(format!("写出 data.js 失败: {e}")))?;
 
-    let readme = build_readme(
-        &SpriteResult {
-            zip_path: PathBuf::new(),
-            staging_dir: PathBuf::new(),
-            frame_count,
-            requested_fps: params.fps,
-            actual_fps,
-            downsampled,
-            pages: layout.pages,
-            cols: layout.cols,
-            frame_width: frame_w,
-            frame_height: frame_h,
-            duration_sec: info.duration_sec,
-        },
-        &source_name,
-        created_at,
-        format_name,
-        quality_opt,
-    );
+        std::fs::write(
+            staging.join("player.html"),
+            include_str!("../../assets/player.html"),
+        )
+        .map_err(|e| AppError::Internal(format!("写出 player.html 失败: {e}")))?;
+    }
+
+    let result = SpriteResult {
+        zip_path,
+        staging_dir: staging.to_path_buf(),
+        frame_count,
+        requested_fps: params.fps,
+        actual_fps,
+        downsampled,
+        pages: layout.as_ref().map(|l| l.pages).unwrap_or(0),
+        cols: layout.as_ref().map(|l| l.cols).unwrap_or(0),
+        frame_width: frame_w,
+        frame_height: frame_h,
+        duration_sec: info.duration_sec,
+        gif: gif_meta,
+    };
+
+    let readme = build_readme(&result, &source_name, created_at, format_name, quality_opt);
     std::fs::write(staging.join("说明.txt"), readme)
         .map_err(|e| AppError::Internal(format!("写出说明文件失败: {e}")))?;
 
     // ── ⑤ pack：zip 打包 ────────────────────────────────────
     handle.progress_now("pack", 0, 1);
-    let stem = input
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "video".into());
     std::fs::create_dir_all(output_dir)
         .map_err(|e| AppError::Internal(format!("创建输出目录失败: {e}")))?;
-    let zip_path = output_dir.join(format!("{stem}_sprite.zip"));
-    let zip_file = std::fs::File::create(&zip_path)
+    let zip_file = std::fs::File::create(&result.zip_path)
         .map_err(|e| AppError::Internal(format!("创建 zip 失败: {e}")))?;
     let mut zw = zip::ZipWriter::new(zip_file);
     let options = zip::write::SimpleFileOptions::default()
@@ -584,28 +642,22 @@ pub fn run(
             .map_err(|e| AppError::Internal(format!("写入 zip 条目 {name} 失败: {e}")))?;
         Ok(())
     };
-    for name in &page_files {
-        add_entry(name, &staging.join(name))?;
+    // 精灵图配套产物仅在精灵图模式下存在。
+    if result.pages > 0 {
+        for name in &page_files {
+            add_entry(name, &staging.join(name))?;
+        }
+        add_entry("data.js", &staging.join("data.js"))?;
+        add_entry("player.html", &staging.join("player.html"))?;
     }
-    add_entry("data.js", &staging.join("data.js"))?;
-    add_entry("player.html", &staging.join("player.html"))?;
+    if let Some(g) = &result.gif {
+        add_entry(&g.name, &staging.join(&g.name))?;
+    }
     add_entry("说明.txt", &staging.join("说明.txt"))?;
     zw.finish()
         .map_err(|e| AppError::Internal(format!("完成 zip 打包失败: {e}")))?;
 
-    Ok(SpriteResult {
-        zip_path,
-        staging_dir: staging.to_path_buf(),
-        frame_count,
-        requested_fps: params.fps,
-        actual_fps,
-        downsampled,
-        pages: layout.pages,
-        cols: layout.cols,
-        frame_width: frame_w,
-        frame_height: frame_h,
-        duration_sec: info.duration_sec,
-    })
+    Ok(result)
 }
 
 /// 把一页帧数据拷入图集缓冲并编码。`frames` 为本页帧的连续字节切片。
@@ -662,7 +714,235 @@ fn encode_page(
     Ok(out)
 }
 
-/// 生成说明.txt 内容。
+// ── GIF 生成（v0.4）：全局调色板 + 5bit LUT + FS 抖动 + 滚动延迟 ──
+
+/// GIF 帧延迟表：GIF 延迟单位 1/100 秒，无法精确表示任意 fps；
+/// 逐帧累计取整（滚动取整），使整段 GIF 的平均帧率与目标一致。
+/// 单帧延迟下限钳 2cs（浏览器对 <2cs 的处理不一致）。
+fn gif_delay_table(fps: f64, frames: u64) -> Vec<u16> {
+    let step = 100.0 / fps.max(0.01);
+    let mut out = Vec::with_capacity(frames as usize);
+    let mut acc = 0.0f64;
+    let mut prev = 0i64;
+    for _ in 0..frames {
+        acc += step;
+        let r = acc.round() as i64;
+        out.push((r - prev).max(2) as u16);
+        prev = r;
+    }
+    out
+}
+
+/// 跳帧规划：GIF 帧率上限低于采样帧率时等距抽帧。
+/// 返回 (GIF 有效帧率, 源帧索引序列)。
+fn gif_frame_plan(sampled_fps: f64, gif_fps_cap: Option<u32>, total: u64) -> (f64, Vec<u64>) {
+    let all = (0..total).collect::<Vec<_>>();
+    match gif_fps_cap {
+        None | Some(0) => (sampled_fps, all),
+        Some(cap) => {
+            let cap = cap as f64;
+            if cap >= sampled_fps {
+                return (sampled_fps, all);
+            }
+            let step = (sampled_fps / cap).max(1.0);
+            let n = ((total as f64) / step).ceil().max(1.0) as u64;
+            let idx = (0..n)
+                .map(|gi| ((gi as f64 * step) as u64).min(total - 1))
+                .collect();
+            (sampled_fps / step, idx)
+        }
+    }
+}
+
+/// 5bit RGB LUT 键：r/g/b 各取高 5 位拼成 15 位索引。
+#[inline]
+fn lut_key(r: u8, g: u8, b: u8) -> usize {
+    ((r as usize >> 3) << 10) | ((g as usize >> 3) << 5) | (b as usize >> 3)
+}
+
+/// 以调色板颜色在 5bit 色桶中心的最近邻构建 32768 项查询表（O(1) 索引化）。
+fn build_lut(palette: &[[u8; 3]]) -> Vec<u8> {
+    let mut lut = vec![0u8; 32768];
+    for (key, slot) in lut.iter_mut().enumerate() {
+        let r = (((key >> 10) & 31) * 8 + 4) as i32;
+        let g = (((key >> 5) & 31) * 8 + 4) as i32;
+        let b = ((key & 31) * 8 + 4) as i32;
+        let (mut best, mut bd) = (0u8, i32::MAX);
+        for (i, p) in palette.iter().enumerate() {
+            let dr = r - p[0] as i32;
+            let dg = g - p[1] as i32;
+            let db = b - p[2] as i32;
+            let d = dr * dr + dg * dg + db * db;
+            if d < bd {
+                bd = d;
+                best = i as u8;
+            }
+        }
+        *slot = best;
+    }
+    lut
+}
+
+/// 全帧均匀抽样（≤64 帧 × ≤1024 像素/帧，≤65536 样本）建 NeuQuant 全局调色板。
+/// 全部帧共用一块调色板，避免逐帧调色板闪烁；返回 RGB 平面（每色 3 字节）。
+fn build_palette(
+    all: &[u8],
+    indices: &[u64],
+    frame_bytes: usize,
+    frame_w: u32,
+    frame_h: u32,
+) -> Vec<[u8; 3]> {
+    let pixels_per_frame = frame_w as usize * frame_h as usize;
+    let frame_sel = indices.len().min(64);
+    let px_stride = pixels_per_frame.div_ceil(1024).max(1);
+    let mut samples: Vec<u8> = Vec::with_capacity(frame_sel * 1024 * 4);
+    for j in 0..frame_sel {
+        let src_i = indices[j * indices.len() / frame_sel] as usize;
+        let base = src_i * frame_bytes;
+        for pi in (0..pixels_per_frame).step_by(px_stride) {
+            let p = &all[base + pi * 4..base + pi * 4 + 4];
+            samples.extend_from_slice(p);
+        }
+    }
+    // 网络规模取样本数的向上幂（上限 256），保证 GIF 调色板为 2 的幂。
+    let net = (samples.len() / 4)
+        .clamp(2, 256)
+        .next_power_of_two()
+        .min(256);
+    let nq = color_quant::NeuQuant::new(10, net, &samples);
+    nq.color_map_rgb()
+        .chunks_exact(3)
+        .map(|c| [c[0], c[1], c[2]])
+        .collect()
+}
+
+/// Floyd-Steinberg 误差扩散抖动 + LUT 索引化。
+/// 误差缓冲两行滚动（免整帧缓冲），系数：右 7/16、下左 3/16、下 5/16、下右 1/16。
+fn dither_frame(frame: &[u8], w: usize, h: usize, lut: &[u8], palette: &[[u8; 3]]) -> Vec<u8> {
+    let ew = w + 2;
+    let mut err = vec![0i32; 2 * ew * 3];
+    let mut out = vec![0u8; w * h];
+    for y in 0..h {
+        let cur = (y & 1) * ew * 3;
+        let nxt = ((y + 1) & 1) * ew * 3;
+        for x in 0..w {
+            let p = (y * w + x) * 4;
+            let ex = x + 1;
+            let e = &err[cur + ex * 3..cur + ex * 3 + 3];
+            let r = (frame[p] as i32 + e[0]).clamp(0, 255);
+            let g = (frame[p + 1] as i32 + e[1]).clamp(0, 255);
+            let b = (frame[p + 2] as i32 + e[2]).clamp(0, 255);
+            let idx = lut[lut_key(r as u8, g as u8, b as u8)] as usize;
+            out[y * w + x] = idx as u8;
+            let (er, eg, eb) = (
+                r - palette[idx][0] as i32,
+                g - palette[idx][1] as i32,
+                b - palette[idx][2] as i32,
+            );
+            // 右 7/16（滚动行自身）
+            let t = &mut err[cur + (ex + 1) * 3..][..3];
+            t[0] += er * 7 / 16;
+            t[1] += eg * 7 / 16;
+            t[2] += eb * 7 / 16;
+            if y + 1 < h {
+                if x > 0 {
+                    // 下左 3/16
+                    let t = &mut err[nxt + (ex - 1) * 3..][..3];
+                    t[0] += er * 3 / 16;
+                    t[1] += eg * 3 / 16;
+                    t[2] += eb * 3 / 16;
+                }
+                // 下 5/16
+                let t = &mut err[nxt + ex * 3..][..3];
+                t[0] += er * 5 / 16;
+                t[1] += eg * 5 / 16;
+                t[2] += eb * 5 / 16;
+                // 下右 1/16
+                let t = &mut err[nxt + (ex + 1) * 3..][..3];
+                t[0] += er / 16;
+                t[1] += eg / 16;
+                t[2] += eb / 16;
+            }
+        }
+        err[cur..cur + ew * 3].fill(0);
+    }
+    out
+}
+
+/// 编码 GIF：建板 → LUT →（可选抖动）逐帧索引化 → 流式写出。
+/// 与精灵图同尺寸、无限循环、整帧不透明（disposal 无关紧要）。
+#[allow(clippy::too_many_arguments)]
+fn encode_gif(
+    handle: &TaskHandle,
+    staging: &Path,
+    name: &str,
+    all: &[u8],
+    indices: &[u64],
+    frame_bytes: usize,
+    frame_w: u32,
+    frame_h: u32,
+    gif_fps: f64,
+    dither: bool,
+) -> AppResult<()> {
+    let n = indices.len();
+    handle.progress_now("gif", 0, n as u64);
+
+    let palette = build_palette(all, indices, frame_bytes, frame_w, frame_h);
+    let lut = build_lut(&palette);
+    let mut palette_bytes = Vec::with_capacity(palette.len() * 3);
+    for p in &palette {
+        palette_bytes.extend_from_slice(p);
+    }
+
+    let path = staging.join(name);
+    let file = std::fs::File::create(&path)
+        .map_err(|e| AppError::Internal(format!("创建 GIF 失败: {e}")))?;
+    let mut enc = gif::Encoder::new(file, frame_w as u16, frame_h as u16, &palette_bytes)
+        .map_err(|e| AppError::Internal(format!("初始化 GIF 编码器失败: {e}")))?;
+    enc.set_repeat(gif::Repeat::Infinite)
+        .map_err(|e| AppError::Internal(format!("设置 GIF 循环失败: {e}")))?;
+    let delays = gif_delay_table(gif_fps, n as u64);
+
+    let (fw, fh) = (frame_w as usize, frame_h as usize);
+    for (gi, &src_i) in indices.iter().enumerate() {
+        if handle.is_cancelled() {
+            return Err(AppError::Cancelled);
+        }
+        let frame = &all[src_i as usize * frame_bytes..][..frame_bytes];
+        let idx_frame: Vec<u8> = if dither {
+            dither_frame(frame, fw, fh, &lut, &palette)
+        } else {
+            frame
+                .chunks_exact(4)
+                .map(|p| lut[lut_key(p[0], p[1], p[2])])
+                .collect()
+        };
+        let f = gif::Frame {
+            delay: delays[gi],
+            dispose: gif::DisposalMethod::Any,
+            transparent: None,
+            needs_user_input: false,
+            top: 0,
+            left: 0,
+            width: frame_w as u16,
+            height: frame_h as u16,
+            interlaced: false,
+            palette: None,
+            buffer: Cow::Owned(idx_frame),
+        };
+        enc.write_frame(&f)
+            .map_err(|e| AppError::Internal(format!("写入 GIF 第 {} 帧失败: {e}", gi + 1)))?;
+        handle.progress("gif", gi as u64 + 1, n as u64);
+    }
+    info!(
+        "GIF 生成完成: {name}（{} fps, {n} 帧, 抖动 {}）",
+        fmt_fps(gif_fps),
+        if dither { "开" } else { "关" }
+    );
+    Ok(())
+}
+
+/// 生成说明.txt 内容。精灵图与 GIF 产物段落按实际选择条件输出。
 fn build_readme(
     r: &SpriteResult,
     source_name: &str,
@@ -681,30 +961,48 @@ fn build_readme(
     } else {
         format!("- 采样帧率：{} fps（未降级）", fmt_fps(r.actual_fps))
     };
-    format!(
-        "视频转精灵图产物说明\n\
-         ====================\n\
-         \n\
-         来源视频：{source_name}\n\
-         生成时间：{created_at}\n\
-         视频时长：{:.2} 秒\n\
-         \n\
-         参数记录：\n\
-         {fps_line}\n\
-         - 帧数：{} 帧（单帧 {}×{}）\n\
-         - 图集：{} 张（{} 格式{quality_note}）\n\
-         - 网格：每页 {} 列，按行排布\n\
-         \n\
-         使用方法：解压后双击 player.html 即可在浏览器中播放精灵动画。\n\
-         - 空格：播放 / 暂停\n\
-         - ← / →：逐帧步进\n\
-         - 拖动进度条：跳转帧\n\
-         - 倍速：0.25× ~ 4×\n\
-         - 循环：可开关\n\
-         \n\
-         data.js 中记录了全部元数据（window.SPRITE_META），可被外部脚本读取。\n",
-        r.duration_sec, r.frame_count, r.frame_width, r.frame_height, r.pages, format_name, r.cols,
-    )
+    let mut s = String::new();
+    s.push_str("视频转精灵图产物说明\n====================\n\n");
+    s.push_str(&format!(
+        "来源视频：{source_name}\n生成时间：{created_at}\n视频时长：{:.2} 秒\n\n",
+        r.duration_sec
+    ));
+    s.push_str("参数记录：\n");
+    s.push_str(&fps_line);
+    s.push_str(&format!(
+        "\n- 帧数：{} 帧（单帧 {}×{}）\n",
+        r.frame_count, r.frame_width, r.frame_height
+    ));
+    if r.pages > 0 {
+        s.push_str(&format!(
+            "- 图集：{} 张（{} 格式{quality_note}）\n",
+            r.pages, format_name
+        ));
+        s.push_str(&format!("- 网格：每页 {} 列，按行排布\n", r.cols));
+    }
+    if let Some(g) = &r.gif {
+        s.push_str(&format!(
+            "- GIF：{}（{} fps，{} 帧，抖动{}）\n",
+            g.name,
+            fmt_fps(g.fps),
+            g.frames,
+            if g.dither { "开" } else { "关" }
+        ));
+    }
+    if r.pages > 0 {
+        s.push_str(
+            "\n使用方法：解压后双击 player.html 即可在浏览器中播放精灵动画。\n\
+             - 空格：播放 / 暂停\n\
+             - ← / →：逐帧步进\n\
+             - 拖动进度条：跳转帧\n\
+             - 倍速：0.25× ~ 4×\n\
+             - 循环：可开关\n",
+        );
+        s.push_str("\ndata.js 中记录了全部元数据（window.SPRITE_META），可被外部脚本读取。\n");
+    } else {
+        s.push_str("\nGIF 为标准动图格式，可直接插入浏览器、聊天工具或网页使用。\n");
+    }
+    s
 }
 
 #[cfg(test)]
@@ -777,5 +1075,120 @@ mod tests {
         assert_eq!(l.cols, 4);
         assert_eq!(l.rows, 3);
         assert_eq!(l.pages, 1);
+    }
+
+    #[test]
+    fn gif_delay_table_rolls() {
+        // 24fps：步长 4.1667cs，滚动取整序列
+        let t = gif_delay_table(24.0, 24);
+        assert_eq!(&t[..8], &[4, 4, 5, 4, 4, 4, 4, 4]);
+        // 24 帧 × 4.1667cs = 100cs = 1s（telescoping，误差不累积）
+        let sum: u32 = t.iter().map(|&d| d as u32).sum();
+        assert_eq!(sum, 100);
+        // 极高帧率：钳制到最小 2cs
+        let t = gif_delay_table(240.0, 10);
+        assert!(t.iter().all(|&d| d >= 2));
+    }
+
+    #[test]
+    fn gif_plan_skips_and_clamps() {
+        // 上限 12、采样 24：步长 2
+        let (fps, idx) = gif_frame_plan(24.0, Some(12), 21);
+        assert!((fps - 12.0).abs() < 1e-9);
+        assert_eq!(idx, (0..21).step_by(2).collect::<Vec<_>>());
+        // 不设上限：全帧
+        let (fps, idx) = gif_frame_plan(15.0, None, 4);
+        assert!((fps - 15.0).abs() < 1e-9);
+        assert_eq!(idx, vec![0, 1, 2, 3]);
+        // 上限高于采样帧率：全帧
+        let (fps, idx) = gif_frame_plan(15.0, Some(24), 4);
+        assert!((fps - 15.0).abs() < 1e-9);
+        assert_eq!(idx.len(), 4);
+        // 非整数步长 1.6：ceil(10/1.6)=7 帧，末尾不越界
+        let (fps, idx) = gif_frame_plan(16.0, Some(10), 10);
+        assert!((fps - 10.0).abs() < 1e-9);
+        assert_eq!(idx, vec![0, 1, 3, 4, 6, 8, 9]);
+    }
+
+    #[test]
+    fn lut_key_buckets() {
+        assert_eq!(lut_key(0, 0, 0), 0);
+        assert_eq!(lut_key(255, 255, 255), 32767);
+        assert_eq!(lut_key(8, 0, 0), 1 << 10);
+        assert_eq!(lut_key(0, 8, 0), 1 << 5);
+        assert_eq!(lut_key(0, 0, 8), 1);
+    }
+
+    #[test]
+    fn dither_exact_when_on_palette() {
+        // 纯黑/纯白且调色板恰好包含这两色：无误差扩散，索引精确
+        let palette = vec![[0u8, 0, 0], [255u8, 255, 255]];
+        let lut = build_lut(&palette);
+        let frame: Vec<u8> = vec![0, 0, 0, 255, 255, 255, 255, 255];
+        let idx = dither_frame(&frame, 2, 1, &lut, &palette);
+        assert_eq!(idx, vec![0, 1]);
+    }
+
+    #[test]
+    fn gif_pipeline_end_to_end() {
+        // 合成 8 帧 32×24 渐变 RGBA，走 建板 → LUT → 抖动 → 编码 全流程
+        let (w, h, n) = (32u32, 24u32, 8u64);
+        let frame_bytes = (w * h * 4) as usize;
+        let mut all = Vec::with_capacity(frame_bytes * n as usize);
+        for i in 0..n {
+            for y in 0..h {
+                for x in 0..w {
+                    all.extend_from_slice(&[
+                        (x as f64 / w as f64 * 255.0) as u8,
+                        (i as f64 / n as f64 * 255.0) as u8,
+                        (y as f64 / h as f64 * 255.0) as u8,
+                        255,
+                    ]);
+                }
+            }
+        }
+        let indices: Vec<u64> = (0..n).collect();
+        let palette = build_palette(&all, &indices, frame_bytes, w, h);
+        assert_eq!(palette.len(), 256);
+        let lut = build_lut(&palette);
+        let delays = gif_delay_table(12.0, n);
+        assert_eq!(delays.len(), 8);
+
+        let mut out = Vec::new();
+        {
+            let mut palette_bytes = Vec::with_capacity(palette.len() * 3);
+            for p in &palette {
+                palette_bytes.extend_from_slice(p);
+            }
+            let mut enc = gif::Encoder::new(&mut out, w as u16, h as u16, &palette_bytes).unwrap();
+            enc.set_repeat(gif::Repeat::Infinite).unwrap();
+            for &src_i in &indices {
+                let frame = &all[src_i as usize * frame_bytes..][..frame_bytes];
+                let idx_frame = dither_frame(frame, w as usize, h as usize, &lut, &palette);
+                let f = gif::Frame {
+                    delay: delays[src_i as usize],
+                    dispose: gif::DisposalMethod::Any,
+                    transparent: None,
+                    needs_user_input: false,
+                    top: 0,
+                    left: 0,
+                    width: w as u16,
+                    height: h as u16,
+                    interlaced: false,
+                    palette: None,
+                    buffer: Cow::Owned(idx_frame),
+                };
+                enc.write_frame(&f).unwrap();
+            }
+        }
+        // 解码验证：帧数、尺寸正确
+        use image::AnimationDecoder;
+        let decoder = image::codecs::gif::GifDecoder::new(Cursor::new(&out)).unwrap();
+        let frames = decoder.into_frames().collect_frames().unwrap();
+        assert_eq!(frames.len(), 8);
+        assert_eq!(
+            (frames[0].buffer().width(), frames[0].buffer().height()),
+            (w, h)
+        );
     }
 }

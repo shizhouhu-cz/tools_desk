@@ -141,7 +141,7 @@ export async function sqliteQuery(
   return invoke<SqliteQueryResult>("sqlite_query", { path, sql, maxRows });
 }
 
-/** 视频转精灵图：抽帧 → 网格图集 → zip（含 data.js / player.html / 说明.txt）。 */
+/** 视频转精灵图：抽帧 →（可选）网格图集 / GIF → zip。 */
 export async function videoSpritesheet(args: {
   input: string;
   fps: number;
@@ -150,6 +150,10 @@ export async function videoSpritesheet(args: {
   format: string;
   quality: number;
   maxFrames: number;
+  generateSprite: boolean;
+  generateGif: boolean;
+  gifFps: number | null;
+  gifDither: boolean;
   outputDir: string | null;
 }): Promise<SpriteOutcome> {
   return invoke<SpriteOutcome>("video_spritesheet", args);
