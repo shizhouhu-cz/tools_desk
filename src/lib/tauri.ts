@@ -3,6 +3,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import type {
   ChapterNode,
+  CompareResult,
   DocxDocumentInfo,
   DocxOutcome,
   InvokeError,
@@ -157,4 +158,12 @@ export async function videoSpritesheet(args: {
   outputDir: string | null;
 }): Promise<SpriteOutcome> {
   return invoke<SpriteOutcome>("video_spritesheet", args);
+}
+
+/** DOCX 标书比对：A 基准 / B 待查，进度走 task:progress 事件。 */
+export async function docxCompare(
+  pathA: string,
+  pathB: string
+): Promise<CompareResult> {
+  return invoke<CompareResult>("docx_compare", { pathA, pathB });
 }

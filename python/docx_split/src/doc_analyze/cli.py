@@ -75,6 +75,54 @@ def extract(
         typer.echo(f"入库完成：{stats}")
 
 
+@app.command("compare")
+def compare(
+    a: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True, help="基准文档 DOCX"),
+    b: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True, help="待查文档 DOCX"),
+    json_out: bool = typer.Option(False, "--json", help="stdout 输出 JSONL 协议（Tauri 集成用）"),
+) -> None:
+    """双文档查重比对；--json 时 stdout 仅输出协议行（progress/result/error）。"""
+    try:
+        from doc_analyze.compare.engine import run_compare
+    except ImportError as e:
+        if json_out:
+            _emit({"type": "error", "message": f"依赖缺失：{e}"})
+        else:
+            typer.secho(f"依赖缺失：{e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=3)
+
+    def on_progress(stage: str, current: int, total: int, message: str | None) -> None:
+        if json_out:
+            _emit(
+                {
+                    "type": "progress",
+                    "stage": stage,
+                    "current": current,
+                    "total": total,
+                    "message": message or "",
+                }
+            )
+
+    try:
+        result = run_compare(a, b, progress=on_progress)
+    except Exception as e:  # noqa: BLE001
+        if json_out:
+            _emit({"type": "error", "message": str(e)})
+        else:
+            typer.secho(f"比对失败：{e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    if json_out:
+        _emit({"type": "result", "ok": True, **result})
+    else:
+        stats = result["stats"]
+        typer.echo(
+            f"比对完成：A 重复率 {stats['rate_a']:.1%} / B 重复率 {stats['rate_b']:.1%}，"
+            f"片段 {stats['fragment_count']} 个，最长 {stats['longest']} 字，"
+            f"耗时 {stats['elapsed_seconds']}s"
+        )
+
+
 @app.command("ingest")
 def ingest(
     path: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True, help="DOCX 文件路径"),

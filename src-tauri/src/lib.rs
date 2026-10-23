@@ -43,6 +43,7 @@ pub fn run() {
             commands::docx_structure::docx_tree,
             commands::docx_structure::docx_documents,
             commands::docx_structure::docx_chapter_content,
+            commands::docx_compare::docx_compare,
             commands::pdf_to_images::pdf_to_images,
             commands::pdf_to_images::probe_dify,
             commands::pdf_edit::pdf_watermark,

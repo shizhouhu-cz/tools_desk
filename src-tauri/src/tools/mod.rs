@@ -1,4 +1,5 @@
 pub mod dify;
+pub mod docx_compare;
 pub mod docx_split;
 pub mod file_collector;
 pub mod pdf_edit;

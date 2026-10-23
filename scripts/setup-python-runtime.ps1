@@ -1,4 +1,4 @@
-﻿# 将 Python embeddable 运行时 + docx_split 依赖装配到 src-tauri/resources/python/，
+# 将 Python embeddable 运行时 + docx_split 依赖装配到 src-tauri/resources/python/，
 # 供 Tauri 以 resources 打包后冷启动子进程调用（python.exe -X utf8 -I -m doc_analyze.cli）。
 #
 # 用法: powershell -ExecutionPolicy Bypass -File scripts/setup-python-runtime.ps1
@@ -64,10 +64,11 @@ Lib/site-packages
 import site
 "@ | Set-Content -Encoding ascii $pthFile
 
-# 5) 用开发 venv 的 pip 以 --target 安装依赖（--only-binary 禁源码编译，保证与 venv 同为 cp314 wheel）
+# 5) 用开发 venv 的 pip 以 --target 安装依赖（--only-binary=rapidfuzz：rapidfuzz 须为 cp314 wheel，
+#    jieba 仅 sdist 无 wheel（纯 Python 无编译风险），其余依赖 PyPI 上均为 wheel）
 $sitePackages = Join-Path $target "Lib\site-packages"
-& $VenvPython -m pip install --only-binary=:all: --upgrade --target $sitePackages `
-  python-docx lxml pydantic typer httpx `
+& $VenvPython -m pip install --only-binary=rapidfuzz --upgrade --target $sitePackages `
+  python-docx lxml pydantic typer httpx jieba rapidfuzz `
   -i https://pypi.tuna.tsinghua.edu.cn/simple
 if ($LASTEXITCODE -ne 0) { throw "pip 安装依赖失败" }
 
@@ -82,7 +83,7 @@ Get-ChildItem $target -Recurse -Force -File -Filter "*.pyc" | Remove-Item -Force
 Get-ChildItem $target -Recurse -Force -Directory -Filter "*.dist-info" | Remove-Item -Recurse -Force
 
 # 8) 冒烟：依赖可导入 → python-docx 生成临时 docx → extract --json 校验 result 行
-& $pyExe -c "import docx, lxml, pydantic, typer, httpx; print('imports-ok')"
+& $pyExe -c "import docx, lxml, pydantic, typer, httpx, jieba, rapidfuzz; print('imports-ok')"
 if ($LASTEXITCODE -ne 0) { throw "依赖导入冒烟失败" }
 
 $smokeDocx = Join-Path $tmp "smoke.docx"

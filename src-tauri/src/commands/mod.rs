@@ -1,4 +1,5 @@
 pub mod collector;
+pub mod docx_compare;
 pub mod docx_structure;
 pub mod open;
 pub mod pdf_edit;

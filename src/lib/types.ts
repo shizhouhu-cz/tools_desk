@@ -219,3 +219,94 @@ export interface SpriteOutcome {
   /** 帧数超上限降级提示（前端必须显式 toast） */
   warning: string | null;
 }
+
+/** docx_compare 片段坐标：块 id + 块原始文本偏移（后端已换算，可直接圈选） */
+export interface CompareFragLoc {
+  block: number;
+  start: number;
+  end: number;
+}
+
+/** docx_compare 重复片段 */
+export interface CompareFragment {
+  a: CompareFragLoc;
+  b: CompareFragLoc;
+  /** 归一化字符长度 */
+  length: number;
+  confidence: "high" | "mid" | "low";
+  /** 连续匹配链长度 */
+  chain: number;
+  content: string;
+  /** 标题 | 正文 | 表格 */
+  match_type: string;
+}
+
+/** docx_compare 统计 */
+export interface CompareStats {
+  total_chars_a: number;
+  total_chars_b: number;
+  rate_a: number;
+  rate_b: number;
+  fragment_count: number;
+  longest: number;
+  by_confidence: Record<
+    string,
+    { fragments: number; chars_a: number; chars_b: number }
+  >;
+  by_chapter: Array<{
+    chapter: string;
+    total: number;
+    covered: number;
+    rate: number;
+  }>;
+  elapsed_seconds: number;
+}
+
+/** 统一块树节点：段落（渲染与比对同源） */
+export interface CompareParaNode {
+  kind: "paragraph";
+  block: number;
+  style: "heading" | "body" | "list";
+  outline: number | null;
+  number_prefix: string | null;
+  font_halfpt: number | null;
+  bold: boolean;
+  align: string | null;
+  chapter: string;
+  text: string;
+}
+
+/** 统一块树节点：表格单元格 */
+export interface CompareCellNode {
+  row: number;
+  col: number;
+  rowSpan: number;
+  colSpan: number;
+  isHeader: boolean;
+  block: number;
+  chapter: string;
+  text: string;
+}
+
+/** 统一块树节点：表格 */
+export interface CompareTableNode {
+  kind: "table";
+  block: number;
+  rows: number;
+  cols: number;
+  cells: CompareCellNode[];
+}
+
+export type CompareNode = CompareParaNode | CompareTableNode;
+
+/** docx_compare 结果（docs 块树为透传 JSON） */
+export interface CompareResult {
+  ok: boolean;
+  docs: {
+    a: { name: string; tree: CompareNode[] };
+    b: { name: string; tree: CompareNode[] };
+  };
+  fragments: CompareFragment[];
+  stats: CompareStats;
+  duration_ms: number;
+}

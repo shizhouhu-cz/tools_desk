@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
+  FileDiff,
   FileSearch,
   FileStack,
   Film,
@@ -19,6 +20,7 @@ import PdfWatermark from "@/tools/pdf-watermark";
 import PdfExtract from "@/tools/pdf-extract";
 import Watermark from "@/tools/watermark";
 import DocxStructure from "@/tools/docx-structure";
+import DocxCompare from "@/tools/docx-compare";
 import SqliteExplorer from "@/tools/sqlite-explorer";
 import VideoSpritesheet from "@/tools/video-spritesheet";
 
@@ -96,6 +98,15 @@ export const TOOLS: ToolMeta[] = [
     description: "把 DOCX 按章节层级结构化入库（SQLite + 全文索引），可选 LLM 结构恢复，支持章节树回看。",
     icon: FileSearch,
     element: <DocxStructure />,
+  },
+  {
+    id: "docx-compare",
+    path: "/tools/docx-compare",
+    title: "DOCX 标书比对",
+    subtitle: "双栏查重 / 片段高亮",
+    description: "对两份 DOCX 做文本查重：倒排召回 + 分层比对定位重复片段，双栏同源渲染并高亮，输出重复率与分章节统计。",
+    icon: FileDiff,
+    element: <DocxCompare />,
   },
   {
     id: "sqlite-explorer",
